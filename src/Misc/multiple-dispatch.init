@@ -1,0 +1,284 @@
+;;;; Copyright(c) 2011, 2012 Joseph Donaldson(donaldsonjw@yahoo.com) 
+;;;; This file is part of multiple-dispatch.
+;;;;
+;;;;     multiple-dispatch is free software: you can redistribute it and/or modify
+;;;;     it under the terms of the GNU Lesser General Public License as
+;;;;     published by the Free Software Foundation, either version 3 of the
+;;;;     License, or (at your option) any later version.
+;;;;
+;;;;     multiple-dispatch is distributed in the hope that it will be useful, but
+;;;;     WITHOUT ANY WARRANTY; without even the implied warranty of
+;;;;     MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+;;;;     Lesser General Public License for more details.
+;;;;
+;;;;     You should have received a copy of the GNU Lesser General Public
+;;;;     License along with multiple-dispatch.  If not, see
+;;;;     <http://www.gnu.org/licenses/>.
+ 
+
+(define-macro (macro-environment)
+   (eval '(begin
+
+	   ;; this is not ideal but I know of no better way to statically
+	   ;; determine whether a type is a non-class type
+	   (define non-class-types
+	      '(dynamic-env
+		procedure
+		procedure-el
+		pair
+		epair
+		nil
+		pair-nil
+		list
+		bint
+		belong
+		bllong
+		bignum
+		bbool
+		cnst
+		bstring
+		ucs2string
+		bchar
+		bucs2
+		real
+		vector
+		tvector
+		weakptr
+		struct
+		tstruct
+		output-port
+		input-port
+		binary-port
+		unspecified
+		symbol
+		keyword
+		cell
+		exit
+		foreign
+		process
+		socket
+		datagram-socket
+		custom
+		date
+		mutex
+		condvar
+		mmap
+		opaque
+		s8vector
+		u8vector
+		s16vector
+		u16vector
+		s32vector
+		u32vector
+		s64vector
+		u64vector
+		f32vector
+		f64vector
+		char
+		uchar
+		ucs2
+		byte
+		ubyte
+		short
+		ushort
+		int
+		uint
+		long
+		ulong
+		elong
+		uelong
+		llong
+		ullong
+		bool
+		string
+		file
+		double
+		float
+		void
+		void*
+		function
+                obj))
+	   
+      (define (typed-arg? sym)
+	 (let ((str (symbol->string sym)))
+	    (string-contains str "::")))
+
+      (define (arg-type sym)
+	 (let* ((str (symbol->string sym))
+		(type-symbol (if (string-contains str "::")
+				 (string->symbol
+				    (cadr (string-split str "::")))
+				 'obj)))
+	    type-symbol))      
+
+      (define (arg-name sym)
+	 (let* ((str (symbol->string sym))
+		(arg-name (string->symbol
+				(car (string-split str "::")))))
+	    arg-name))
+
+      (define (class-type? sym)
+	      (not (find (lambda (x) (eq? x sym)) non-class-types)))
+      
+      (define (collect-dispatch-args args)
+	 (let loop ((lst args)
+		    (dispatch-args '()))
+	    (if (pair? lst)
+		(cond ((and (typed-arg? (car lst))
+			    (class-type? (arg-type (car lst))))
+		       (loop (cdr lst)
+			  (cons (car lst) dispatch-args)))
+		      ((and (not (class-type? (arg-type (car lst))))
+			    (null? dispatch-args))
+		       (error "collect-dispatch-args" "invalid dispatch args" args))
+		      (else
+		       (values (reverse! dispatch-args) lst)))
+		(if (null? dispatch-args)
+		    (error "collect-dispatch-args" "invalid dispatch args" args)
+		    (values (reverse! dispatch-args) '())))))
+
+      (define (remove-args-types args)
+	  (map (lambda (x) (arg-name x)) args))
+      
+      (define (dispatch-args->specializer-list dispatch-args)
+	 (map (lambda (x) (find-class (arg-type x))) dispatch-args))
+
+      (define (dispatch-args->type-list dispatch-args)
+	 (map (lambda (x) (arg-type x)) dispatch-args))
+
+      (define (make-cache-creation-exp)
+	 `(create-hashtable
+	     :hash (lambda (x)
+		      (let loop ((lst x)
+				 (res 0))
+			 (if (pair? lst)
+			     (loop (cdr lst)
+				(bit-xor (get-hashnumber (car lst)) res))
+			     res)))
+	     :eqtest equal?))
+
+      (define (make-cache-check-exp cache-name k)
+	 `(hashtable-contains? ,cache-name ,k))
+
+      (define (make-cache-fetch-exp cache-name k)
+	 `(begin
+	     #;(print "fetching cached value for " ,k)
+	     (hashtable-get ,cache-name ,k)))
+
+      (define (make-cache-store-exp cache-name k v)
+	 `(hashtable-put! ,cache-name ,k ,v))
+      
+      (define (make-cache-clear-exp cache)
+	 `(for-each
+	     (lambda (key) (hashtable-remove! ,cache key))
+	     (hashtable-key-list ,cache)))
+	   
+      (define (make-dispatch-function generic default cache-name dispatch-args rest-args)
+	 `(lambda ,(append dispatch-args rest-args)
+	     (let* ((spec-list (map object-class
+				  (list ,@(remove-args-types
+				       dispatch-args)))) 
+		    (applicable-methods
+		      (if ,(make-cache-check-exp
+			      cache-name
+			      'spec-list)
+			  ,(make-cache-fetch-exp
+			      cache-name
+			      'spec-list)
+			  (let ((res 
+				   (collect-applicable-methods ,generic
+				      spec-list)))
+			     ,(make-cache-store-exp cache-name
+				 'spec-list 'res)
+			     res))))
+		#;(print "applicable-methods: " applicable-methods)
+		(if (pair? applicable-methods)
+		    (let ((most-specific-method::md-method (car applicable-methods))
+			  (next-methods (cdr applicable-methods)))
+		       (let ((entry (-> most-specific-method entry)))
+			  (entry next-methods ,@(remove-args-types (append dispatch-args
+							 rest-args)))))
+		    (,default '() ,@(remove-args-types (append dispatch-args rest-args)))))))
+
+      (define (make-md-call-next-method args)
+	 `(define (call-next-method)
+	     ;(print "next-methods" next-methods)
+	     (if (pair? next-methods)
+		 (let ((mthd::md-method (car next-methods)))
+		    ((-> mthd entry) (cdr next-methods)
+				     ,@(remove-args-types args)))
+		 (error "call-next-method" "no suitable method" ',args))))
+  
+	   
+      (define (make-md-generic name args body)
+         (when (null? body)
+	      (error "define-md-generic" "generic body required" name))
+	 (receive (dispatch-args rest-args)
+	    (collect-dispatch-args args)
+	    (let ((def-name (string->symbol  (string-append "| "
+					(symbol->string name) " default |")))
+		  (cache-name (string->symbol  (string-append "| "
+					(symbol->string name) " cache |")))) 
+	    `(begin
+		
+		(define ,def-name (lambda ,(cons 'next-methods::pair-nil args)
+				      ,@(cons (make-md-call-next-method args )
+					   body)))
+		(define ,cache-name ,(make-cache-creation-exp)) 
+		(define ,name 
+		   (procedure->generic
+		      ,(let ((dispatch-fn (make-dispatch-function name def-name
+					     cache-name
+					     dispatch-args
+					     rest-args)))
+			  dispatch-fn)))
+
+		(let ((spec-list (map find-class
+				    ',(dispatch-args->type-list dispatch-args))))
+		   (add-md-generic-method! ,name ,def-name spec-list #t)
+		   (add-md-generic-methods-cache! ,name ,cache-name))))))
+
+	(define (make-md-method name args body)
+           (when (null? body)
+	      (error "define-md-method" "method body required" name))
+	   (receive (dispatch-args rest-args)
+	      (collect-dispatch-args args)
+	      `(let ((spec-list (map find-class
+				   ',(dispatch-args->type-list dispatch-args))))
+		  ,(make-cache-clear-exp `(get-md-generic-methods-cache ,name))
+		  (add-md-generic-method! ,name (lambda ,(cons 'next-methods::pair-nil args) ,@(cons (make-md-call-next-method args )body))
+		     spec-list))))
+
+
+      ))
+   #unspecified)
+
+
+(macro-environment)
+
+
+
+(define-expander define-md-generic
+   (lambda (x e)
+      (match-case x
+	 ((?- (?name . ?args) . ?body)
+	  (e (make-md-generic name args body) e))
+	 (else
+	  (error "define-md-generic" "illegal form" x)))))
+
+(define-expander define-md-method
+   (lambda (x e)
+      (match-case x
+	 ((?- (?name . ?args) . ?body)
+	  (e (make-md-method name args body) e))
+	 (else
+	  (error "define-md-method" "illegal form" x)))))
+
+
+
+(declare-library! 'multiple-dispatch 
+   :version "0.5"
+   :srfi '(multiple-dispatch)
+   :basename "multiple-dispatch"
+   :module-eval '__multiple_dispatch_make_lib)
+

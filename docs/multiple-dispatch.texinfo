@@ -1,0 +1,112 @@
+\input texinfo
+
+
+@setfilename multiple-dispatch.info
+@settitle multiple-dispatch
+
+@syncodeindex tp fn 
+@syncodeindex vr fn
+
+
+@ifinfo
+
+Copyright @copyright{} 2011,2012 Joseph Donaldson 
+@end ifinfo 
+
+@titlepage
+@title multiple-dispatch
+@author Joseph Donaldson
+
+@c The following two commands start the copyright page.
+@c @page
+@c @vskip 0pt plus 1filll
+@end titlepage
+
+@node    Top,       Overview, ,         (dir)
+@comment node-name, next,          previous, up
+@menu
+* Overview::    What is this multiple-dispatch library?.
+* API Reference::
+* Example::  
+* Index::   
+@end menu
+
+@node    Overview, API Reference, Top,      Top
+@comment node-name,     next,          previous, up
+@chapter Overview
+
+The multiple-dispatch library provides multiple-dispatch generic functions for Bigloo's object system. The implementation is short and relatively simple. Very little optimization has been done. 
+
+The rest of this document describes the API extensions added by the multiple-dispatch library.
+
+@node API Reference,Example,Overview,Top
+@comment node-name, next,          previous, up
+@chapter API Reference
+
+@menu
+* define-md-generic::
+* define-md-method::
+@end menu
+
+@node define-md-generic, define-md-method, ,API Reference
+@comment node-name, next,          previous, up
+
+
+@defmac define-md-generic (name arg...) default-body
+@code{define-md-generic} creates a multiple-dispatch generic function. The first n (where n is 1 or greater) class-typed arguments are used for dispatching. The @code{default-body} must be provided. Multiple-dispatch generic functions can be exported from a module with an module export clause of the form @code{(export generic-function-name)}. Specifying argument types is not supported at this time. 
+@end defmac
+
+@node define-md-method,,define-md-generic ,API Reference
+@comment node-name, next,          previous, up
+
+@defmac define-md-method (name arg...) default-body
+@code{define-md-method} creates a multiple dispatch method. Its arguments must be compatible with those declared in the generic function. The generic function must be defined and visible before a method can be defined. In the body of a method, @code{call-next-method} can be used to call the next most specific method.
+@end defmac
+
+
+@node    Example,Index ,API Reference, Top
+@comment node-name, next,          previous, up
+@chapter Example
+The following is a simple example of using the multiple-dispatch library. It prints the following:
+@example
+two animals 
+a dog and a cat 
+two dogs
+@end example 
+
+@example
+@cartouche 
+(module example
+   (library multiple-dispatch)
+   (main main))
+
+(define-class animal)
+(define-class dog::animal)
+(define-class cat::animal)
+
+(define-md-generic (doit a1::animal a2::animal)
+   "two animals")
+
+(define-md-method (doit a1::dog a2::cat)
+   "a dog and a cat")
+
+(define-md-method (doit a1::dog a2::dog)
+   "two dogs")
+
+(define (main args)
+   (print (doit (instantiate::cat) (instantiate::dog)))
+   (print (doit (instantiate::dog) (instantiate::cat)))
+   (print (doit (instantiate::dog) (instantiate::dog))))
+
+@end cartouche
+@end example
+
+
+
+@node    Index,    ,Example, Top
+@comment node-name, next,          previous, up
+@unnumbered Index
+@printindex fn
+
+@contents
+@bye  
